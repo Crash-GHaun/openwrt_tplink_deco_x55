@@ -1,3 +1,7 @@
+#
+
+include $(TOPDIR)/rules.mk
+
 DEVICE_VARS += BOOT_SCRIPT
 
 define Build/mstc-header
@@ -127,6 +131,66 @@ define Device/linksys_spnmx56
 		ipq-wifi-linksys_spnmx56
 endef
 TARGET_DEVICES += linksys_spnmx56
+
+# ----------------------------------------------------------------------
+# NEW: Custom Image Wrapper for TP-Link Deco QSDK-based images
+# Note: This utility calculates CRC and prepends a minimal header. 
+# ----------------------------------------------------------------------
+define Build/tplink-deco-header
+    # $1 is the device identifier string (e.g., "tplink,deco-x55-v1.6")
+    
+    # 1. Calculate CRC32 of the kernel+rootfs blob
+    gzip -c $@ | tail -c8 > $@.crclen
+    
+    # 2. Prepend the proprietary header (adjusting to a simple QSDK-style header)
+    ( \
+        printf "TPLK"; \
+        printf "$(call toupper,$(LINUX_KARCH))" | dd bs=4 count=1 conv=sync 2>/dev/null; \
+        printf '$1' | dd bs=64 count=1 conv=sync 2>/dev/null; \
+        printf '1.0' | dd bs=4 count=1 conv=sync 2>/dev/null; \
+        dd if=/dev/zero bs=4 count=1 2>/dev/null; \
+        tail -c+5 $@.crclen; head -c4 $@.crclen; \
+        dd if=/dev/zero bs=1024 count=1 2>/dev/null; \
+        cat $@; \
+    ) > $@.new
+    mv $@.new $@
+    rm -f $@.crclen
+endef
+
+# ----------------------------------------------------------------------
+# TP-Link Deco X55 v1.6 (IPQ5018, 512MB RAM, NAND) - REFINED
+# ----------------------------------------------------------------------
+define Device/tplink_deco-x55-v1.6
+    $(call Device/FitImage)
+    
+    DEVICE_VENDOR := TP-Link
+    DEVICE_MODEL := Deco X55 v1.6
+    # DTS file name must match the file we created: qcom-ipq5018-tplink-deco-x55-v1.6.dts
+    DTS := qcom-ipq5018-tplink-deco-x55-v1.6 
+    SOC := ipq5018
+    # Enable UBI features
+    KERNEL_IN_UBI := 1 
+    BLOCKSIZE := 128k
+    PAGESIZE := 2048
+    NAND_SIZE := 256m
+    # Set to the exact size of firmware partition 0x2a00000 (~42MB)
+    IMAGE_SIZE := 44032
+    IMAGES := factory.bin sysupgrade.bin
+    
+    # Factory image: Combines UBI image, then applies the custom Deco header
+    # 'append-ubi' creates the UBI image blob (kernel + rootfs)
+    IMAGE/factory.bin := append-ubi | tplink-deco-header "tplink,deco-x55-v1.6"
+    
+    # Sysupgrade image: Standard OpenWrt UBI/SquashFS format for in-place updates.
+    IMAGE/sysupgrade.bin := append-ubi | sysupgrade-tar
+    
+    DEVICE_PACKAGES := \
+        kmod-ath11k kmod-ath11k-firmware-qcn6122 \
+        kmod-realtek-rtl8367s \
+        ipq-wifi-tplink_deco-x55-v1.6 \
+        kmod-qca-ssdk
+endef
+TARGET_DEVICES += tplink_deco-x55-v1.6
 
 define Device/xiaomi_ax6000
 	$(call Device/FitImage)

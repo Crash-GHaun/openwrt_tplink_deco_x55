@@ -1,0 +1,4 @@
+echo "===================================================="
+echo " OpenWrt debug shell (custom /init override)"
+echo "===================================================="
+exec /bin/sh </dev/ttyMSM0 >/dev/ttyMSM0 2>&1

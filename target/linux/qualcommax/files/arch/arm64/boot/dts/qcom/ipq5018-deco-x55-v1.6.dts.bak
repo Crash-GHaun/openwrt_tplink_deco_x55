@@ -1,0 +1,201 @@
+/dts-v1/;
+
+#include "ipq5018.dtsi"
+#include "ipq5018-mx-base.dtsi"
+
+/ {
+    model = "TP-Link Deco X55 v1.6";
+    compatible = "tplink,deco-x55-v1.6", "qcom,ipq5018";
+
+    aliases {
+        serial0 = &uart0;
+        mmc0 = &qpic_nand;
+        // Add standard Ethernet aliases for OpenWrt netdev naming
+        ethernet0 = &switch;
+    };
+
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0x0 0x40000000 0x0 0x20000000>;
+    };
+
+};
+
+// --- NAND PARTITION LAYOUT (No changes) ---
+&qpic_nand {
+    status = "okay";
+    label = "flash";
+
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        
+        partition@0 {
+            label = "sbl1";
+            reg = <0x00000000 0x00080000>;
+        };
+        // ... (rest of partitions are unchanged) ...
+        partition@80000 { label = "mibib"; reg = <0x00080000 0x00080000>; };
+        partition@100000 { label = "bootconfig"; reg = <0x00100000 0x00080000>; };
+        partition@180000 { label = "qsee"; reg = <0x00180000 0x00100000>; };
+        partition@280000 { label = "devcfg"; reg = <0x00280000 0x00080000>; };
+        partition@300000 { label = "appsblenv"; reg = <0x00300000 0x00080000>; };
+        partition@380000 { label = "appsbl"; reg = <0x00380000 0x00140000>; };
+        partition@4c0000 { label = "art"; reg = <0x004c0000 0x00100000>; read-only; };
+        partition@5c0000 { label = "training"; reg = <0x005c0000 0x00080000>; };
+        partition@640000 {
+            label = "firmware";
+            reg = <0x00640000 0x02a00000>;
+            compatible = "openwrt,ubi";
+        };
+        partition@3040000 {
+            label = "firmware_alt";
+            reg = <0x03040000 0x02a00000>;
+            compatible = "openwrt,ubi";
+        };
+        partition@5a40000 { label = "ethphyfw"; reg = <0x05a40000 0x00080000>; };
+        partition@5ac0000 { label = "factory_data"; reg = <0x05ac0000 0x00900000>; };
+        partition@63c0000 { label = "runtime_data"; reg = <0x063c0000 0x01100000>; };
+    };
+};
+
+// --- CORE FIX: Use ESS Controller for Switching ---
+&switch {
+    // FIX: Enable the internal switch controller
+    status = "okay";
+    
+    ports {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        
+        // This port represents the internal connection (CPU port)
+        port@6 { 
+            reg = <6>;
+            label = "cpu";
+            
+            // Connects the internal MAC (GMAC1, which links to dp2) to the switch
+            cpu_port_mac: endpoint {
+                remote-endpoint = <&switch_port_cpu>;
+            };
+        };
+        
+        // The rest of the ports are external, managed by the RTL8367S switch.
+        // We link to them via the MDIO bus definition below.
+    };
+};
+
+// FIX: Disable NSS Datapath 1 (if present) and 2. 
+// This prevents the low-level driver conflict you were seeing.
+&dp1 {
+    status = "disabled";
+};
+
+&dp2 {
+    // FIX: Disable the NSS DP for Ethernet
+    status = "disabled"; 
+    
+    // Define the MAC for the built-in ESS controller to use
+    // The ESS controller will use GMAC1 which is tied to dp2's resources (address 0x39D00000)
+    qcom,mac-id = <1>; // GMAC1
+    qcom,phy-mdio-addr = <0x1c>; 
+    phy-mode = "rgmii-id"; 
+};
+
+// --- MDIO/External Switch Configuration ---
+&mdio1 {
+    status = "okay";
+    
+    clocks = <&gcc GCC_MDIO1_AHB_CLK>, <&gcc GCC_MDIO1_MST_CLK>;
+    clock-names = "ahb", "mdio";
+
+    rtl8367s_switch: switch@1c {
+        compatible = "realtek,rtl8365mb"; 
+        reg = <0x1c>;
+        realtek,chip-name = "RTL8367S";
+        
+        reset-gpios = <&tlmm 39 GPIO_ACTIVE_HIGH>;
+        reset-post-delay-ms = <500>;
+        
+        // The ESS driver needs this property to identify the CPU uplink port on the external chip
+        realtek,ext-switch-port = <5>; 
+        status = "okay";
+        
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@5 { // RTL8367S Port 5 is the CPU/Uplink Port
+                reg = <5>; 
+                label = "cpu-uplink";
+                
+                switch_port_cpu: endpoint {
+                    // FIX: Link back to the internal switch's CPU port
+                    remote-endpoint = <&cpu_port_mac>; 
+                };
+            };
+
+            // Assuming typical 2 LAN, 1 WAN wiring on the external switch chip
+            port@0 { reg = <0>; label = "lan1"; };
+            port@1 { reg = <1>; label = "lan2"; };
+            port@2 { reg = <2>; label = "wan"; };
+        };
+    };
+};
+
+/*
+ * ===============================================================
+ * Wireless LAN Configuration (No changes needed)
+ * ===============================================================
+ */
+
+&q6v5_wcss {
+    status = "okay";
+    // ... (remoteproc-pd1 and remoteproc-pd2 nodes) ...
+    q6_wcss_pd1: remoteproc-pd1 {
+        compatible = "qcom,ipq5018-q6v5-wcss-pd";
+        reg = <0x0 0x48400000 0x0 0x400000>;
+        interrupts = <GIC_SPI 159 IRQ_TYPE_LEVEL_HIGH>;
+        qcom,msa-name = "wcss_wlan0";
+        label = "wlan0";
+        qcom,subsystem-name = "wcss_wlan0";
+    };
+
+    q6_wcss_pd2: remoteproc-pd2 {
+        compatible = "qcom,ipq5018-q6v5-wcss-pd";
+        reg = <0x0 0x48800000 0x0 0x400000>;
+        interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_HIGH>;
+        qcom,msa-name = "wcss_wlan1";
+        label = "wlan1";
+        qcom,subsystem-name = "wcss_wlan1";
+    };
+};
+
+&wifi0 {
+    qcom,rproc = <&q6_wcss_pd1>;
+    qcom,ath11k-calibration-variant = "Default"; 
+    qcom,ath11k-fw-memory-mode = <1>;
+    qcom,bdf-addr = <0x4c400000>; 
+    status = "okay";
+};
+
+&wifi1 {
+    qcom,rproc = <&q6_wcss_pd2>;
+    qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
+    qcom,ath11k-calibration-variant = "Default";
+    qcom,ath11k-fw-memory-mode = <1>;
+    qcom,bdf-addr = <0x4d100000>; 
+    qcom,m3-dump-addr = <0x4df00000>;
+    status = "okay";
+};
+
+/*
+ * ===============================================================
+ * Console Setup (UART0) (No changes needed)
+ * ===============================================================
+ */
+&soc {
+    uart0: serial@78af000 {
+        status = "okay";
+    };
+};

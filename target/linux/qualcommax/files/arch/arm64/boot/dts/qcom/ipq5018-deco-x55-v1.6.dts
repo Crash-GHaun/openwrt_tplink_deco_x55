@@ -1,0 +1,335 @@
+/dts-v1/;
+
+#include "qcom-ipq5018.dtsi"
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
+// FIX: Explicitly include the clock definitions, as they are likely missing
+#include <dt-bindings/clock/qcom,gcc-ipq5018.h> 
+
+/ {
+    model = "TP-Link Deco X55 v1.6";
+    compatible = "tplink,deco-x55-v1.6", "qcom,ipq5018";
+    interrupt-parent = <&intc>;
+    #address-cells = <1>;
+    #size-cells = <1>;
+
+    aliases {
+        // Point the primary console alias to the working UART (blsp1_uart1)
+        serial0 = &blsp1_uart1;
+        nand0 = &nand;
+        // Point the primary Ethernet alias to the CPU's link endpoint on the switch
+        ethernet0 = &ess_switch_cpu_port; 
+    };
+
+    chosen {
+		bootargs-append = " root=/dev/ubiblock0_0 coherent_pool=2M";
+		stdout-path = "serial0:115200n8";
+	};
+
+    // CRITICAL: Reserved memory regions (from previous version, assuming correct)
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+
+        q6_region: wcnss@4b000000 {
+            no-map;
+            reg = <0x0 0x4b000000 0x0 0x01800000>; /* 24MB */
+        };
+
+        m3_dump: m3_dump@4c800000 {
+            no-map;
+            reg = <0x0 0x4c800000 0x0 0x100000>; /* 1MB */
+        };
+
+        q6_etr_region: q6_etr_dump@4c900000 {
+            no-map;
+            reg = <0x0 0x4c900000 0x0 0x100000>; /* 1MB */
+        };
+
+        q6_caldb_region: q6_caldb_region@4ca00000 {
+            no-map;
+            reg = <0x0 0x4ca00000 0x0 0x200000>; /* 2MB */
+        };
+
+        qcn6102_pcie0: qcn6102_pcie0@4cc00000 {
+            no-map;
+            reg = <0x0 0x4CC00000 0x0 0x01E00000>; /* 30MB */
+        };
+
+        mhi_region1: dma_pool1@4ea00000 {
+            compatible = "shared-dma-pool";
+            no-map;
+            reg = <0x0 0x4ea00000 0x0 0x01000000>; /* 16MB */
+        };
+    };
+
+    // --- Buttons and LEDs ---
+    gpio_keys {
+        compatible = "gpio-keys";
+        pinctrl-0 = <&button_pins>;
+        pinctrl-names = "default";
+
+        button_wps: button@1 {
+            label = "wps";
+            linux,code = <KEY_WPS_BUTTON>;
+            gpios = <&tlmm 38 GPIO_ACTIVE_LOW>;
+            debounce-interval = <60>;
+        };
+
+        button_reset: button@2 {
+            label = "reset";
+            linux,code = <KEY_RESTART>;
+            gpios = <&tlmm 33 GPIO_ACTIVE_LOW>;
+            debounce-interval = <60>;
+        };
+    };
+
+    leds {
+        compatible = "gpio-leds";
+
+        red_led: red {
+            label = "deco-x55:red";
+            gpios = <&tlmm 27 GPIO_ACTIVE_HIGH>;
+            default-state = "off";
+        };
+        green_led: green {
+            label = "deco-x55:green";
+            gpios = <&tlmm 24 GPIO_ACTIVE_HIGH>;
+            default-state = "off";
+        };
+        blue_led: blue {
+            label = "deco-x55:blue";
+            gpios = <&tlmm 29 GPIO_ACTIVE_HIGH>;
+            default-state = "on";
+        };
+    };
+};
+
+/* --- NAND FLASH DEFINITION --- */
+&nand {
+    status = "okay";
+
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        partition@0 { label = "sbl1"; reg = <0x00000000 0x00080000>; read-only; };
+        partition@80000 { label = "mibib"; reg = <0x00080000 0x00080000>; read-only; };
+        partition@100000 { label = "bootconfig"; reg = <0x00100000 0x00080000>; read-only; };
+        partition@180000 { label = "qsee"; reg = <0x00180000 0x00100000>; read-only; };
+        partition@280000 { label = "devcfg"; reg = <0x00280000 0x00080000>; read-only; };
+        partition@300000 { label = "appsblenv"; reg = <0x00300000 0x00080000>; read-only; };
+        partition@380000 { label = "appsbl"; reg = <0x00380000 0x00140000>; read-only; };
+        partition@4c0000 { label = "art"; reg = <0x004c0000 0x00100000>; read-only; };
+        partition@5c0000 { label = "training"; reg = <0x005c0000 0x00080000>; read-only; };
+
+        partition@640000 {
+            label = "firmware";
+            reg = <0x00640000 0x02a00000>;
+            compatible = "openwrt,ubi";
+        };
+        partition@3040000 {
+            label = "firmware_alt";
+            reg = <0x03040000 0x02a00000>;
+            compatible = "openwrt,ubi";
+        };
+
+        partition@5a40000 { label = "ethphyfw"; reg = <0x05a40000 0x00080000>; read-only; };
+        partition@5ac0000 { label = "factory_data"; reg = <0x05ac0000 0x00900000>; };
+        partition@63c0000 { label = "runtime_data"; reg = <0x063c0000 0x01100000>; };
+    };
+};
+
+// --- UART Console Overrides (CRITICAL FIXES: Status and Pin Control) ---
+
+// This is the working UART at 0x78af000, must be set to "okay"
+&blsp1_uart1 {
+    status = "okay";
+    
+    // CRITICAL FIX: Reference the pin control group with the correct GPIOs
+    pinctrl-0 = <&serial_0_pins>; 
+    pinctrl-names = "default";
+};
+
+// This is the unused UART at 0x78b0000, must be kept disabled
+&blsp1_uart2 {
+    status = "disabled";
+};
+
+// --- Network Configuration: MDIO and External Switch (RTL8367S confirmed) ---
+
+// Enable the MDIO controller and define the external switch under it
+&mdio1 {
+    status = "okay";
+
+    // Reverting to single AHB clock as per user request (MST clock was not available)
+    clocks = <&gcc GCC_MDIO1_AHB_CLK>; 
+    clock-names = "ahb";
+
+    // Switch Reset GPIO
+    pinctrl-0 = <&mdio_reset_pins>;
+    pinctrl-names = "default";
+    phy-reset-gpio = <&tlmm 39 0>; 
+
+    rtl8367s_switch: ethernet-switch@1c {
+        compatible = "realtek,rtl8365mb", "realtek,rtl8367s";
+        reg = <0x1c>;
+        reset-gpios = <&tlmm 39 0>;
+        reset-post-delay-ms = <500>;
+        realtek,ext-switch-port = <5>;
+        status = "okay";
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            // Port 5 is the external uplink connecting to the CPU's internal port 6
+            port@5 {
+                reg = <5>;
+                label = "uplink";
+
+                switch_port_uplink: endpoint {
+                    remote-endpoint = <&ess_switch_cpu_port>; // Link to the CPU port endpoint
+                };
+            };
+
+            port@0 { reg = <0>; label = "lan1"; };
+            port@1 { reg = <1>; label = "lan2"; };
+            port@2 { reg = <2>; label = "wan"; };
+        };
+    };
+};
+
+// --- Wireless LAN Configuration (QCN6102 confirmed) ---
+
+&q6v5_wcss {
+    status = "okay";
+};
+
+&qcom_q6v5_wcss {
+    status = "okay";
+};
+
+&wifi0 {
+    qcom,rproc = <&qcom_q6v5_wcss>;
+    qcom,ath11k-calibration-variant = "Default";
+    qcom,ath11k-fw-memory-mode = <1>;
+    qcom,bdf-addr = <0x4c400000>;
+    status = "okay";
+};
+
+&wifi1 {
+    // FIX: Changed qcom,rproc from <&mhi> to the specific MHI controller <&mhi_1>
+    qcom,rproc = <&mhi_1>; 
+    qcom,ath11k-calibration-variant = "Default";
+    qcom,ath11k-fw-memory-mode = <1>;
+    qcom,bdf-addr = <0x4d100000>;
+    status = "okay";
+};
+
+&wifi2 {
+    status = "disabled";
+};
+
+// --- Peripherals and Pin Control (Including the now-correct ESS config) ---
+&soc {
+    uart0: serial@78af000 {
+        status = "okay";
+    };
+    // The ess-instance node is a child of the soc node in the DTSI.
+    // Overriding it here places the modifications in the correct parent context.
+    ess-instance {
+        // This targets the ess-switch@0x39c00000 node inside ess-instance
+        ess_switch_node: ess-switch@39c00000 { 
+            status = "okay";
+
+            ports {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                // Port 6 is the CPU link to the ESS switch
+                port@6 {
+                    reg = <6>;
+                    label = "cpu";
+
+                    // This is the essential endpoint for the alias and connection
+                    ess_switch_cpu_port: endpoint { 
+                        remote-endpoint = <&switch_port_uplink>;
+                    };
+                };
+            };
+        };
+    };
+};
+
+&tlmm {
+    status = "okay";
+
+    // CRITICAL FIX: Using the GPIOs and function proven to work by your previous file
+    serial_0_pins: uart0-state {
+        pins = "gpio20", "gpio21";
+        function = "blsp0_uart0";
+        bias-disable;
+    };
+
+    rgmii_pins: rgmii_pins {
+        pins = "gpio17", "gpio18", "gpio19", "gpio20", "gpio21", "gpio22",
+               "gpio23", "gpio25", "gpio26";
+        function = "rgmii";
+        bias-pull-down;
+    };
+
+    button_pins: button_pins {
+        wps_button {
+            pins = "gpio38";
+            function = "gpio";
+            bias-pull-up;
+        };
+        reset_button {
+            pins = "gpio33";
+            function = "gpio";
+            bias-pull-up;
+        };
+    };
+
+    // MDIO Reset Pin (GPIO 39)
+    mdio_reset_pins: mdio_reset_pins {
+        pins = "gpio39";
+        function = "gpio";
+        bias-disable;
+        output-high;
+    };
+};
+
+&pcie_x2 {
+    status = "okay";
+    perst-gpio = <&tlmm 15 1>;
+};
+
+&pcie_x2phy {
+    status = "okay";
+};
+
+// FIX: Added the PCIe x2 Root Port definition and the mhi_1 controller,
+// based on your reference file, to properly initialize the MHI for wifi1 (QCN6102).
+&pcie_x2_rp {
+    status = "okay";
+    
+    mhi_1: qcom,mhi@1 {
+        reg = <0 0 0 0 0 >;
+        qrtr_instance_id = <0x20>;
+        #address-cells = <0x2>;
+        #size-cells = <0x2>;
+        memory-region = <&mhi_region1>;
+    };
+};
+
+&mhi_region1 {
+    status = "okay";
+};
+
+&mdio0 {
+    status = "disabled";
+};
